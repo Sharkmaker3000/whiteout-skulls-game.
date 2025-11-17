@@ -1173,3 +1173,4 @@
     </script>
 </body>
 </html>
+<link rel="manifest" href="/whiteout-skulls-game/manifest.json">

@@ -1,0 +1,1175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Whiteout Skulls: 2D Shooter</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome for Icons -->
+    <script src="https://kit.fontawesome.com/a076d05399.js" crossorigin="anonymous"></script>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        // Global variables provided by the Canvas environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'whiteout-skulls-2d-default-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { /* Mock Config */ };
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let app, db, auth;
+        let userId = null;
+        let isAuthReady = false;
+
+        // --- Weapon Definitions (Added more for variety) ---
+        const WEAPONS = {
+            'pistol': { name: 'Sentinel Pistol', color: '#ffcc00', radius: 5, damage: 10, speed: 15, cooldown: 250, icon: '🔫' },
+            'rifle': { name: 'A-301 Rifle', color: '#00ffc8', radius: 3, damage: 5, speed: 20, cooldown: 100, icon: '🎯' },
+            'shotgun': { name: 'Boomstick', color: '#ff0077', radius: 7, damage: 15, speed: 10, cooldown: 600, icon: '💣' },
+            'plasma': { name: 'Plasma Disruptor', color: '#ff00ff', radius: 4, damage: 12, speed: 18, cooldown: 200, icon: '⚡' },
+            'railgun': { name: 'Railgun', color: '#88aaff', radius: 2, damage: 25, speed: 30, cooldown: 800, icon: '☄️' },
+        };
+
+        window.WEAPONS = WEAPONS; // Expose for use in game logic
+
+        // Operator definitions now include game-relevant visual and weapon stats
+        window.GAME_STATE = {
+            level: 1,
+            currency: 0,
+            xp: 0,
+            unlockedOperators: [],
+            selectedOperator: 'gingerbread_man', 
+            mpRank: 'Recruit',
+            isGameRunning: false,
+            currentMap: 'farm_map', 
+            
+            // --- 8 Operator Designs ---
+            OPERATORS: {
+                'gingerbread_man': { 
+                    name: 'Gingerbeard Man', 
+                    type: 'Zombies', 
+                    iconColor: 'bg-green-600', 
+                    locked: false, 
+                    playerColor: '#8b4513', 
+                    weapon: 'pistol', 
+                    playerRadius: 20,
+                    playerDesign: 'gingerbread' // Custom shape for drawing
+                },
+                'the_devil': { 
+                    name: 'The Devil', 
+                    type: 'Zombies', 
+                    iconColor: 'bg-red-700', 
+                    locked: false, 
+                    playerColor: '#ff0000', 
+                    weapon: 'rifle', 
+                    playerRadius: 18,
+                    playerDesign: 'horns'
+                },
+                'mp_base': { 
+                    name: 'MP Operator', 
+                    type: 'MP', 
+                    iconColor: 'bg-gray-700', 
+                    locked: false, 
+                    playerColor: '#555555', 
+                    weapon: 'shotgun', 
+                    playerRadius: 22,
+                    playerDesign: 'helmet'
+                },
+                'cyborg_assassin': { 
+                    name: 'Cyborg Assassin', 
+                    type: 'MP', 
+                    iconColor: 'bg-blue-400', 
+                    locked: false, 
+                    playerColor: '#00ffff', 
+                    weapon: 'plasma', 
+                    playerRadius: 19,
+                    playerDesign: 'cyborg'
+                },
+                'ghost_pirate': { 
+                    name: 'Ghost Pirate', 
+                    type: 'Zombies', 
+                    iconColor: 'bg-white', 
+                    locked: false, 
+                    playerColor: '#d3d3d3', 
+                    weapon: 'pistol', 
+                    playerRadius: 21,
+                    playerDesign: 'ghost'
+                },
+                'toxic_mutant': { 
+                    name: 'Toxic Mutant', 
+                    type: 'Zombies', 
+                    iconColor: 'bg-green-800', 
+                    locked: false, 
+                    playerColor: '#008000', 
+                    weapon: 'shotgun', 
+                    playerRadius: 23,
+                    playerDesign: 'mutant'
+                },
+                'fire_starter': { 
+                    name: 'Fire Starter', 
+                    type: 'MP', 
+                    iconColor: 'bg-orange-600', 
+                    locked: false, 
+                    playerColor: '#ff8c00', 
+                    weapon: 'railgun', 
+                    playerRadius: 20,
+                    playerDesign: 'fire'
+                },
+                'arctic_scout': { 
+                    name: 'Arctic Scout', 
+                    type: 'MP', 
+                    iconColor: 'bg-blue-600', 
+                    locked: false, 
+                    playerColor: '#4682b4', 
+                    weapon: 'rifle', 
+                    playerRadius: 17,
+                    playerDesign: 'arctic'
+                }
+            },
+            MAPS: {
+                'farm_map': { 
+                    name: 'Farm Map (Normal)', 
+                    theme: 'farm', 
+                    background: '#2c3e50', 
+                    tileMain: '#6aa84f',
+                    tileAccent: '#a6876c'
+                },
+                'christmas_map': { 
+                    name: 'Christmas Map (Snow)', 
+                    theme: 'christmas', 
+                    background: '#0a304e', 
+                    tileMain: '#ffffff',
+                    tileAccent: '#f0f0f0'
+                }
+            }
+        };
+
+        // --- Gemini API Configuration ---
+        const GEMINI_API_KEY = ""; 
+        const GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025";
+        const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+        const MAX_RETRIES = 3;
+
+        // --- Firebase Imports ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, getDoc, serverTimestamp, setLogLevel, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Set Firestore log level
+        setLogLevel('error');
+
+        // --- Firebase Initialization and Auth ---
+        window.initializeFirebase = async () => {
+            try {
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
+                        isAuthReady = true;
+                        window.setupFirestoreListeners(userId);
+                        document.getElementById('loading-screen').classList.add('hidden');
+                        document.getElementById('main-menu').classList.remove('hidden');
+                    } else {
+                        userId = null;
+                        isAuthReady = true; 
+                        document.getElementById('loading-screen').textContent = 'Authentication failed. Please reload.';
+                    }
+                });
+
+            } catch (error) {
+                console.error("Firebase setup error:", error);
+                document.getElementById('loading-screen').textContent = 'Error initializing game services.';
+            }
+        };
+
+        // --- Firestore Data Management ---
+        const getUserDataDocRef = (uid) => doc(db, `artifacts/${appId}/users/${uid}/gameData/profile`);
+
+        window.saveGameData = async () => {
+            if (!isAuthReady || !userId) return;
+            const data = {
+                level: window.GAME_STATE.level,
+                currency: window.GAME_STATE.currency,
+                xp: window.GAME_STATE.xp,
+                unlockedOperators: window.GAME_STATE.unlockedOperators,
+                selectedOperator: window.GAME_STATE.selectedOperator,
+                mpRank: window.GAME_STATE.mpRank,
+                lastUpdated: serverTimestamp()
+            };
+            try {
+                await setDoc(getUserDataDocRef(userId), data, { merge: true });
+            } catch (e) {
+                console.error("Error saving document: ", e);
+            }
+        };
+
+        window.setupFirestoreListeners = (uid) => {
+            getDoc(getUserDataDocRef(uid)).then(docSnap => {
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    window.GAME_STATE.level = data.level || 1;
+                    window.GAME_STATE.currency = data.currency || 0;
+                    window.GAME_STATE.xp = data.xp || 0;
+                    window.GAME_STATE.mpRank = data.mpRank || 'Recruit';
+                    window.GAME_STATE.unlockedOperators = data.unlockedOperators || Object.keys(window.GAME_STATE.OPERATORS).filter(k => !window.GAME_STATE.OPERATORS[k].locked);
+                    window.GAME_STATE.selectedOperator = data.selectedOperator || 'gingerbread_man';
+                } else {
+                    window.GAME_STATE.unlockedOperators = Object.keys(window.GAME_STATE.OPERATORS).filter(k => !window.GAME_STATE.OPERATORS[k].locked);
+                    window.saveGameData();
+                }
+                window.updateUI();
+            }).catch(e => console.error("Error loading initial document:", e));
+        };
+
+        // --- UI and General Game Functions ---
+        window.onload = window.initializeFirebase;
+
+        window.updateUI = () => {
+            if (!isAuthReady) return;
+            document.getElementById('player-level').textContent = window.GAME_STATE.level;
+            document.getElementById('player-currency').textContent = window.GAME_STATE.currency;
+            document.getElementById('player-xp').textContent = window.GAME_STATE.xp;
+            document.getElementById('mp-rank').textContent = window.GAME_STATE.mpRank;
+            document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
+            
+            const selectedOp = window.GAME_STATE.OPERATORS[window.GAME_STATE.selectedOperator];
+            const selectedWeapon = window.WEAPONS[selectedOp.weapon];
+
+            document.getElementById('selected-op-name').textContent = selectedOp.name;
+            document.getElementById('selected-weapon-name').textContent = selectedWeapon.name;
+            document.getElementById('selected-weapon-stats').innerHTML = `
+                <p>Damage: <span class="text-yellow-400">${selectedWeapon.damage}</span></p>
+                <p>Fire Rate: <span class="text-yellow-400">${(60000 / selectedWeapon.cooldown).toFixed(1)} RPM</span></p>
+                <p>Velocity: <span class="text-yellow-400">${selectedWeapon.speed} u/s</span></p>
+            `;
+            
+            const selectedMap = window.GAME_STATE.MAPS[window.GAME_STATE.currentMap];
+            
+            // Mode is currently fixed as Zombies, but this structure allows for future expansion
+            document.getElementById('selected-mode-text').textContent = `Selected Mode: Zombies - ${selectedMap.name} (Operator: ${selectedOp.name})`;
+
+            // Operator List for selection
+            const opList = document.getElementById('operator-list');
+            if (opList) {
+                 opList.innerHTML = '';
+                 Object.entries(window.GAME_STATE.OPERATORS).forEach(([key, op]) => {
+                     const isSelected = window.GAME_STATE.selectedOperator === key;
+                     const card = document.createElement('div');
+                     card.className = `p-3 rounded-xl border-2 cursor-pointer transition duration-150 ${isSelected ? 'border-neon-text ring-4 ring-neon-text/50' : 'border-gray-700 hover:border-white/50'}`;
+                     card.onclick = () => {
+                         window.GAME_STATE.selectedOperator = key;
+                         window.updateUI();
+                     };
+                     card.innerHTML = `<h4 class="text-sm font-bold text-white">${op.name}</h4><p class="text-xs text-gray-400">${op.type} Class (${window.WEAPONS[op.weapon].icon})</p>`;
+                     opList.appendChild(card);
+                 });
+            }
+            
+            // Map Card Highlighting
+            document.querySelectorAll('.map-card').forEach(card => {
+                const mapId = card.id.split('-')[1];
+                if (mapId === window.GAME_STATE.currentMap) {
+                    card.classList.add('map-card-selected');
+                    card.classList.remove('map-card-default');
+                } else {
+                    card.classList.remove('map-card-selected');
+                    card.classList.add('map-card-default');
+                }
+            });
+        };
+
+        window.loadMenu = (menuId) => {
+            document.querySelectorAll('.game-menu').forEach(menu => menu.classList.add('hidden'));
+            const menu = document.getElementById(menuId);
+            if (menu) {
+                menu.classList.remove('hidden');
+                window.updateUI();
+            }
+        };
+
+        window.selectMap = (mapId) => {
+            window.GAME_STATE.currentMap = mapId;
+            window.updateUI();
+            alertBox.show('Map Selected', `${window.GAME_STATE.MAPS[mapId].name} is ready for deployment.`, 'text-neon-text');
+        }
+        
+        window.gainCurrency = () => {
+            window.GAME_STATE.currency += 500;
+            window.GAME_STATE.level += 1;
+            window.GAME_STATE.xp += 1000;
+            window.saveGameData();
+            window.updateUI();
+        }
+
+        // --- LLM Powered Lore Generation Feature (Simplified for space) ---
+        async function retryOperation(operation, maxRetries, delay = 1000) {
+            for (let i = 0; i < maxRetries; i++) {
+                try { return await operation(); } 
+                catch (error) {
+                    if (i === maxRetries - 1) throw error;
+                    await new Promise(resolve => setTimeout(resolve, delay * Math.pow(2, i)));
+                }
+            }
+        }
+
+        window.generateLore = async () => {
+            if (!window.userId || !window.isAuthReady) {
+                alertBox.show('Authentication Required', 'Please ensure you are logged in before accessing Chronos AI.', 'text-red-500');
+                return;
+            }
+            const operator = window.GAME_STATE.OPERATORS[window.GAME_STATE.selectedOperator];
+            if (!operator) return;
+            const loreOutput = document.getElementById('lore-output');
+            const loreButton = document.getElementById('lore-button');
+            loreOutput.innerHTML = '<div class="text-center text-neon-text mt-4">Generating Chronos File... <i class="fas fa-spinner fa-spin"></i></div>';
+            loreButton.disabled = true;
+
+            const userQuery = `Write a gritty, post-apocalyptic backstory file (2-3 paragraphs, max 150 words) for a playable military operative in a game called 'Whiteout Skulls: Year 3012'. The operator is named '${operator.name}' and belongs to the '${operator.type}' class. They use a weapon called the ${window.WEAPONS[operator.weapon].name}.`;
+            const systemPrompt = "You are the Lore Master for 'Whiteout Skulls 3012'. Your response must be highly thematic, dark, and futuristic, suitable for a mature FPS game. Do not use conversational language or headings; output only the story text. Use terms like 'Cryo-sleep', 'Wasteland', and 'Neo-Sector'.";
+
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+            };
+
+            try {
+                const response = await retryOperation(async () => {
+                    const res = await fetch(GEMINI_API_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    if (!res.ok) throw new Error(`API call failed with status: ${res.status}`);
+                    return res.json();
+                }, MAX_RETRIES);
+
+                const candidate = response.candidates?.[0];
+                if (candidate && candidate.content?.parts?.[0]?.text) {
+                    const text = candidate.content.parts[0].text;
+                    let outputHTML = `<div class="p-4 border-l-4 border-neon-text bg-gray-900/50 mb-3 text-white">${text.replace(/\n/g, '<br><br>')}</div>`;
+                    loreOutput.innerHTML = outputHTML;
+                } else {
+                    loreOutput.innerHTML = '<p class="text-neon-red">Error: AI failed to generate lore file. Try again.</p>';
+                }
+            } catch (error) {
+                console.error("Gemini API Error:", error);
+                loreOutput.innerHTML = '<p class="text-neon-red">Connection failed. Chronos AI is currently offline.</p>';
+            } finally {
+                loreButton.disabled = false;
+            }
+        };
+
+        // Global Alert Box (to replace alert())
+        const alertBox = {
+            show: (title, message, colorClass) => {
+                const modal = document.getElementById('custom-modal');
+                document.getElementById('modal-title').textContent = title;
+                document.getElementById('modal-message').textContent = message;
+                document.getElementById('modal-title').className = `text-2xl font-bold mb-2 ${colorClass || 'text-white'}`;
+                modal.classList.remove('opacity-0', 'pointer-events-none');
+            },
+            hide: () => {
+                const modal = document.getElementById('custom-modal');
+                modal.classList.add('opacity-0', 'pointer-events-none');
+            }
+        };
+        window.alertBox = alertBox;
+        
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400..900&display=swap');
+        body {
+            font-family: 'Orbitron', sans-serif;
+            background-color: #0d1117; 
+            overflow: hidden;
+        }
+        #game-canvas {
+            display: block;
+            background-color: #2c3e50;
+            border: 4px solid #00ffc8;
+            border-radius: 8px;
+            box-shadow: 0 0 20px rgba(0, 255, 200, 0.5);
+            margin: 0 auto;
+            max-width: 90vw;
+            max-height: 90vh;
+            cursor: crosshair; /* Indicate shooting ability */
+        }
+        #main-menu, #loading-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 20;
+            background-color: rgba(13, 17, 23, 0.95); 
+        }
+        #game-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 100vw;
+            height: 100vh;
+        }
+        .neon-text {
+            color: #00ffc8;
+            text-shadow: 0 0 5px #00ffc8, 0 0 10px #00ffc8, 0 0 20px rgba(0, 255, 200, 0.5);
+        }
+        .game-button {
+            transition: all 0.2s;
+            box-shadow: 0 0 8px rgba(0, 255, 200, 0.3);
+        }
+        .game-button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 15px #00ffc8;
+            background-color: #00ffc8;
+            color: #0d1117;
+        }
+        .text-neon-red {
+            color: #ff0077;
+            text-shadow: 0 0 5px #ff0077;
+        }
+        .writing-mode-vertical-lr {
+            writing-mode: vertical-lr;
+        }
+        .map-card-selected {
+            border-color: #00ffc8 !important;
+            box-shadow: 0 0 10px #00ffc8;
+        }
+        .map-card-default {
+            border-color: #1f2937 !important;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Loading Screen (Initial state) -->
+    <div id="loading-screen" class="flex items-center justify-center bg-[#0d1117] text-white text-3xl flex-col">
+        <div class="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-neon-text mb-4"></div>
+        <p>Initializing Whiteout Skulls...</p>
+        <p class="text-sm mt-2 text-gray-500">Connecting to Firebase Services (Year 3012)</p>
+    </div>
+
+    <!-- Main Game Screen (Canvas + HUD) -->
+    <div id="game-screen" class="hidden">
+        <canvas id="game-canvas" width="800" height="600"></canvas>
+        <!-- Game HUD -->
+        <div id="game-hud" class="w-full max-w-4xl flex justify-between p-4 bg-gray-900/70 rounded-b-xl text-white border-t-0 border-x border-b border-neon-text/50 -mt-2">
+            <div class="text-xl">Wave: <span id="hud-wave" class="neon-text">1</span></div>
+            <div class="text-lg">Zombies Left: <span id="hud-zombies" class="text-neon-red">10</span></div>
+            <div class="text-lg">Kills: <span id="hud-kills" class="text-yellow-400">0</span></div>
+            <div class="text-2xl neon-text"><span id="hud-weapon">RIFLE</span></div>
+        </div>
+    </div>
+
+
+    <!-- Main Menu Overlay -->
+    <div id="main-menu" class="hidden">
+        <!-- Sidebar Navigation -->
+        <div class="fixed top-0 left-0 h-full w-20 bg-gray-900/80 p-4 flex flex-col items-center justify-start border-r border-gray-700/50">
+            <h1 class="neon-text text-xl mb-12 transform rotate-180 writing-mode-vertical-lr"><span class="text-sm text-yellow-400">WS</span> SKULLS</h1>
+            
+            <button class="mb-4 p-3 bg-gray-800 text-white rounded-lg hover:bg-neon-text hover:text-gray-900 transition-colors" onclick="loadMenu('home-menu')">
+                <i class="fas fa-home"></i>
+            </button>
+            <button class="mb-4 p-3 bg-gray-800 text-white rounded-lg hover:bg-neon-text hover:text-gray-900 transition-colors" onclick="loadMenu('play-menu')">
+                <i class="fas fa-crosshairs"></i>
+            </button>
+            <button class="mb-4 p-3 bg-gray-800 text-white rounded-lg hover:bg-neon-text hover:text-gray-900 transition-colors" onclick="loadMenu('operator-menu')">
+                <i class="fas fa-user-friends"></i>
+            </button>
+            <button class="mt-auto p-3 bg-red-700 text-white rounded-lg hover:bg-red-500 transition-colors" onclick="window.gainCurrency()">
+                <i class="fas fa-plus"></i>
+            </button>
+        </div>
+
+        <!-- Main Content Area -->
+        <div class="ml-20 p-8 h-full overflow-y-auto">
+            
+            <!-- Player Stats HUD -->
+            <div class="fixed top-0 right-0 p-4 bg-gray-900/70 rounded-bl-xl text-xs text-white z-50 flex space-x-4 border-b border-l border-gray-700/50">
+                <span id="user-id-display" class="text-gray-400">User ID: ...</span>
+                <span>Level: <span id="player-level" class="text-neon-text font-bold">1</span></span>
+                <span>XP: <span id="player-xp" class="text-yellow-400 font-bold">0</span></span>
+                <span>Currency: <span id="player-currency" class="text-green-400 font-bold">0</span> <i class="fas fa-gem text-green-400 ml-1"></i></span>
+                <span>MP Rank: <span id="mp-rank" class="text-blue-400 font-bold">Recruit</span></span>
+            </div>
+
+            <!-- Home Menu -->
+            <div id="home-menu" class="game-menu h-full pt-16">
+                <h2 class="text-6xl neon-text mb-8">WHITEOUT SKULLS</h2>
+                <p class="text-gray-400 mb-8 text-lg">Year 3012 - The Future is War.</p>
+                
+                <button class="game-button bg-neon-text text-gray-900 px-10 py-4 text-2xl font-bold rounded-xl mb-6 w-96" onclick="window.startGame()">
+                    DEPLOY
+                </button>
+                <div class="text-gray-500 text-sm" id="selected-mode-text">
+                    Selected Map: Zombies - Farm Map (Normal)
+                </div>
+            </div>
+
+            <!-- Play Menu (Map Selection) -->
+            <div id="play-menu" class="game-menu h-full pt-16 hidden">
+                <h2 class="text-4xl neon-text mb-8 border-b-2 border-gray-700 pb-2">SELECT DEPLOYMENT MAP</h2>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl">
+
+                    <!-- Farm Map Card -->
+                    <div class="bg-gray-800/80 p-6 rounded-xl border-2 hover:border-green-400 transition duration-300 map-card" 
+                         id="map-farm_map" onclick="selectMap('farm_map')">
+                        <h3 class="text-3xl text-green-400 font-bold mb-2">FARM MAP</h3>
+                        <p class="text-gray-400 mb-4">Classic grass and dirt wasteland tile set.</p>
+                        <div class="h-20 bg-gray-900 rounded-lg flex items-center justify-center border-4 map-card-default" style="border-color:#6aa84f;">
+                            <i class="fas fa-tree text-green-600 text-4xl"></i>
+                        </div>
+                    </div>
+
+                    <!-- Christmas Map Card -->
+                    <div class="bg-gray-800/80 p-6 rounded-xl border-2 hover:border-red-400 transition duration-300 map-card"
+                         id="map-christmas_map" onclick="selectMap('christmas_map')">
+                        <h3 class="text-3xl text-red-400 font-bold mb-2">CHRISTMAS MAP</h3>
+                        <p class="text-gray-400 mb-4">Icy, treacherous snow and frozen ground tile set.</p>
+                        <div class="h-20 bg-gray-900 rounded-lg flex items-center justify-center border-4 map-card-default" style="border-color:#ffffff;">
+                            <i class="fas fa-snowflake text-blue-300 text-4xl"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Operator Menu -->
+            <div id="operator-menu" class="game-menu h-full pt-16 hidden">
+                <h2 class="text-4xl neon-text mb-8 border-b-2 border-gray-700 pb-2">OPERATOR SELECTION</h2>
+                <div class="flex flex-col lg:flex-row">
+                    <!-- Operator List (Left Side) -->
+                    <div id="operator-list-container" class="w-full lg:w-2/3 pr-0 lg:pr-8 mb-8 lg:mb-0">
+                        <h3 class="text-2xl text-white mb-4">Select Operator</h3>
+                        <div id="operator-list" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 text-center">
+                            <!-- Operator cards will be injected here by updateUI() -->
+                        </div>
+                    </div>
+                    
+                    <!-- Operator Details & Lore Generator (Right Side) -->
+                    <div class="w-full lg:w-1/3 pl-0 lg:pl-8 border-t lg:border-t-0 lg:border-l border-gray-700 pt-8 lg:pt-0">
+                        <h3 class="text-2xl text-white mb-4">Chronos AI: Lore File <span class="text-neon-red">(Selected: <span id="selected-op-name" class="text-yellow-400"></span>)</span></h3>
+                        
+                        <div class="bg-gray-800 p-4 rounded-lg border border-purple-600/50">
+                            <h4 class="text-lg text-white mb-2 border-b border-gray-700 pb-1">Weapon: <span id="selected-weapon-name" class="text-neon-text"></span></h4>
+                            <div id="selected-weapon-stats" class="text-sm text-gray-400 mb-4"></div>
+
+                            <button id="lore-button" 
+                                class="w-full bg-purple-600 text-white px-4 py-3 font-bold rounded-lg hover:bg-purple-500 transition mb-4"
+                                onclick="window.generateLore()">
+                                ✨ Generate Lore File
+                            </button>
+
+                            <div id="lore-output" class="text-gray-400 text-sm italic overflow-y-auto max-h-96">
+                                <p>Select an operator and click 'Generate Lore File' to get a deep-dive backstory generated by the Chronos AI, specialized in 'Whiteout Skulls' world-building.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+    
+    <!-- Custom Modal (Non-alert) -->
+    <div id="custom-modal" class="fixed inset-0 bg-black/80 flex items-center justify-center transition-opacity duration-300 opacity-0 pointer-events-none z-50">
+        <div class="bg-gray-900 p-8 rounded-xl w-full max-w-sm border-2 border-neon-text/50 shadow-2xl">
+            <h3 id="modal-title" class="text-2xl font-bold mb-2 text-white"></h3>
+            <p id="modal-message" class="text-gray-300 mb-6"></p>
+            <button class="w-full bg-neon-text text-gray-900 px-4 py-2 font-bold rounded-lg hover:bg-white transition" onclick="alertBox.hide()">
+                ACKNOWLEDGE
+            </button>
+        </div>
+    </div>
+
+    <script>
+        
+        let canvas, ctx;
+        let animationFrameId;
+
+        // 2D Game Constants
+        const TILE_SIZE = 40;
+        const MAP_WIDTH = 800;
+        const MAP_HEIGHT = 600;
+        const PLAYER_SPEED = 4;
+        const ENEMY_RADIUS = 15;
+        const ENEMY_SPEED = 1;
+        const ENEMY_MAX_HEALTH = 20;
+        const ZOMBIE_COUNT_PER_WAVE = 5;
+
+        // Game State Variables
+        let player = { x: 0, y: 0, dx: 0, dy: 0, radius: 20, color: '#e94560', health: 100, weapon: {}, playerDesign: 'gingerbread' };
+        let projectiles = [];
+        let enemies = [];
+        let kills = 0;
+        let wave = 1;
+        let mapData = []; 
+        let currentMapTheme;
+        let keys = {};
+        let lastShotTime = 0;
+
+        // --- Game Entity Classes ---
+
+        class Projectile {
+            constructor(x, y, angle, weaponStats) {
+                this.x = x;
+                this.y = y;
+                this.radius = weaponStats.radius;
+                this.color = weaponStats.color;
+                this.damage = weaponStats.damage;
+                this.velocity = {
+                    x: Math.cos(angle) * weaponStats.speed,
+                    y: Math.sin(angle) * weaponStats.speed
+                };
+            }
+
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2, false);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+            }
+
+            update() {
+                this.x += this.velocity.x;
+                this.y += this.velocity.y;
+                this.draw();
+            }
+        }
+
+        class Enemy {
+            constructor(x, y, radius, color, speed, maxHealth) {
+                this.x = x;
+                this.y = y;
+                this.radius = radius;
+                this.color = color;
+                this.speed = speed;
+                this.health = maxHealth;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                
+                // Draw the Skull/Zombie Body
+                ctx.fillStyle = this.color;
+                // Main head
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Eyes (white)
+                ctx.fillStyle = 'white';
+                ctx.beginPath();
+                ctx.arc(-this.radius * 0.35, -this.radius * 0.35, this.radius * 0.2, 0, Math.PI * 2);
+                ctx.arc(this.radius * 0.35, -this.radius * 0.35, this.radius * 0.2, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Inner eye (black pupil)
+                ctx.fillStyle = 'black';
+                ctx.beginPath();
+                ctx.arc(-this.radius * 0.35, -this.radius * 0.35, this.radius * 0.1, 0, Math.PI * 2);
+                ctx.arc(this.radius * 0.35, -this.radius * 0.35, this.radius * 0.1, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Mouth (glowing red line)
+                ctx.strokeStyle = '#ff0077';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(-this.radius * 0.5, this.radius * 0.5);
+                ctx.lineTo(this.radius * 0.5, this.radius * 0.5);
+                ctx.stroke();
+
+                ctx.restore();
+                
+                // Draw health bar above
+                const barWidth = this.radius * 2;
+                const barHeight = 4;
+                const healthRatio = this.health / ENEMY_MAX_HEALTH;
+                
+                ctx.fillStyle = 'black';
+                ctx.fillRect(this.x - this.radius, this.y - this.radius - barHeight - 2, barWidth, barHeight);
+                
+                ctx.fillStyle = healthRatio > 0.5 ? 'green' : (healthRatio > 0.2 ? 'yellow' : 'red');
+                ctx.fillRect(this.x - this.radius, this.y - this.radius - barHeight - 2, barWidth * healthRatio, barHeight);
+            }
+
+            update(playerX, playerY) {
+                // Simple AI: Move towards player
+                const dx = playerX - this.x;
+                const dy = playerY - this.y;
+                const angle = Math.atan2(dy, dx);
+                
+                this.x += Math.cos(angle) * this.speed;
+                this.y += Math.sin(angle) * this.speed;
+                this.draw();
+            }
+        }
+
+        // --- Character Drawing Function ---
+        function drawShape(ctx, x, y, radius, color, designType) {
+            ctx.save();
+            // Translate is already done in drawPlayer, we draw relative to (0, 0)
+            
+            // Default body color
+            ctx.fillStyle = color;
+
+            switch (designType) {
+                case 'gingerbread':
+                    // Main body (Rounded square shape)
+                    ctx.fillRect(-radius * 0.75, -radius * 1.5, radius * 1.5, radius * 3);
+                    ctx.beginPath();
+                    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+                    ctx.fill();
+                    // Buttons (eyes/face)
+                    ctx.fillStyle = 'white';
+                    ctx.beginPath();
+                    ctx.arc(-radius * 0.3, -radius * 0.3, radius * 0.15, 0, Math.PI * 2);
+                    ctx.arc(radius * 0.3, -radius * 0.3, radius * 0.15, 0, Math.PI * 2);
+                    ctx.fill();
+                    break;
+                case 'horns':
+                    // Main Body (Circle)
+                    ctx.beginPath();
+                    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+                    ctx.fill();
+                    // Horns (Triangles)
+                    ctx.fillStyle = '#cc7700'; // Darker orange/brown
+                    ctx.beginPath();
+                    ctx.moveTo(-radius * 0.5, -radius * 1.5);
+                    ctx.lineTo(-radius * 0.1, -radius * 0.5);
+                    ctx.lineTo(-radius * 0.8, -radius * 0.5);
+                    ctx.fill();
+                    ctx.beginPath();
+                    ctx.moveTo(radius * 0.5, -radius * 1.5);
+                    ctx.lineTo(radius * 0.1, -radius * 0.5);
+                    ctx.lineTo(radius * 0.8, -radius * 0.5);
+                    ctx.fill();
+                    break;
+                case 'helmet':
+                    // Main Body (Gray)
+                    ctx.beginPath();
+                    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+                    ctx.fill();
+                    // Visor (Black rectangle)
+                    ctx.fillStyle = 'black';
+                    ctx.fillRect(-radius * 0.8, -radius * 0.3, radius * 1.6, radius * 0.6);
+                    break;
+                case 'cyborg':
+                    // Main Body (Teal)
+                    ctx.beginPath();
+                    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+                    ctx.fill();
+                    // Cybernetic eye (Glowing dot)
+                    ctx.fillStyle = '#ff0077';
+                    ctx.beginPath();
+                    ctx.arc(radius * 0.5, -radius * 0.3, radius * 0.2, 0, Math.PI * 2);
+                    ctx.fill();
+                    break;
+                case 'ghost':
+                    // Main Body (White, slightly transparent)
+                    ctx.fillStyle = 'rgba(211, 211, 211, 0.7)';
+                    ctx.beginPath();
+                    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+                    ctx.fill();
+                    // Eye patch (Black)
+                    ctx.fillStyle = 'black';
+                    ctx.fillRect(0, -radius * 0.5, radius * 0.7, radius * 0.3);
+                    break;
+                case 'mutant':
+                    // Main Body (Green, irregular shape - triangle)
+                    ctx.beginPath();
+                    ctx.moveTo(0, -radius * 1.2);
+                    ctx.lineTo(radius * 1.2, radius * 0.8);
+                    ctx.lineTo(-radius * 1.2, radius * 0.8);
+                    ctx.closePath();
+                    ctx.fill();
+                    // Goo drip
+                    ctx.fillStyle = '#32cd32';
+                    ctx.fillRect(-radius * 0.5, radius * 0.8, radius * 1, radius * 0.5);
+                    break;
+                case 'fire':
+                    // Main Body (Orange-Red, fiery shape - simple star)
+                    ctx.beginPath();
+                    ctx.moveTo(0, -radius * 1.5);
+                    ctx.lineTo(radius * 0.5, -radius * 0.5);
+                    ctx.lineTo(radius * 1.5, 0);
+                    ctx.lineTo(radius * 0.5, radius * 0.5);
+                    ctx.lineTo(0, radius * 1.5);
+                    ctx.lineTo(-radius * 0.5, radius * 0.5);
+                    ctx.lineTo(-radius * 1.5, 0);
+                    ctx.lineTo(-radius * 0.5, -radius * 0.5);
+                    ctx.closePath();
+                    ctx.fill();
+                    break;
+                case 'arctic':
+                    // Main Body (Blue, hooded shape - top flat)
+                    ctx.beginPath();
+                    ctx.arc(0, radius * 0.2, radius, 0, Math.PI * 2);
+                    ctx.fill();
+                    // Hood line (white)
+                    ctx.fillStyle = 'white';
+                    ctx.fillRect(-radius * 0.9, -radius * 0.7, radius * 1.8, radius * 0.3);
+                    break;
+                default:
+                    // Fallback to simple circle
+                    ctx.beginPath();
+                    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+                    ctx.fill();
+            }
+            
+            // Simple Weapon/Facing Indicator (All characters)
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(radius + 5, 0);
+            ctx.stroke();
+
+            ctx.restore();
+        }
+        
+        // --- Game Setup and Control Functions ---
+
+        window.startGame = () => {
+            if (window.GAME_STATE.isGameRunning) return;
+            
+            window.GAME_STATE.isGameRunning = true;
+            document.getElementById('main-menu').classList.add('hidden');
+            document.getElementById('game-screen').classList.remove('hidden');
+
+            // Load player and weapon stats from selected operator
+            const selectedOp = window.GAME_STATE.OPERATORS[window.GAME_STATE.selectedOperator];
+            const weaponStats = window.WEAPONS[selectedOp.weapon];
+
+            player = {
+                x: MAP_WIDTH / 2, 
+                y: MAP_HEIGHT / 2, 
+                dx: 0, 
+                dy: 0, 
+                radius: selectedOp.playerRadius, 
+                color: selectedOp.playerColor, 
+                health: 100,
+                weapon: weaponStats,
+                playerDesign: selectedOp.playerDesign // Passed to drawing function
+            };
+            
+            kills = 0;
+            wave = 1;
+            projectiles = [];
+            enemies = [];
+            
+            // --- Crucial: Set the map theme based on current selection ---
+            currentMapTheme = window.GAME_STATE.MAPS[window.GAME_STATE.currentMap]; 
+            
+            generateMap();
+            spawnWave(wave);
+            updateHUD();
+
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            animate();
+        };
+        
+        window.endGame = () => {
+            if (!window.GAME_STATE.isGameRunning) return;
+
+            window.GAME_STATE.isGameRunning = false;
+            document.getElementById('main-menu').classList.remove('hidden');
+            document.getElementById('game-screen').classList.add('hidden');
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            
+            const xpGained = kills * 15;
+            const currencyGained = kills * 8;
+            window.GAME_STATE.xp += xpGained;
+            window.GAME_STATE.currency += currencyGained;
+            window.GAME_STATE.level = Math.floor(window.GAME_STATE.xp / 1000) + 1; 
+            window.saveGameData();
+
+            alertBox.show('MISSION FAILED', `You were overwhelmed after Wave ${wave} with ${kills} kills. XP Gained: ${xpGained}, Currency Gained: ${currencyGained}.`, 'text-neon-red');
+        };
+
+
+        function init2D() {
+            canvas = document.getElementById('game-canvas');
+            ctx = canvas.getContext('2d');
+            
+            // Set canvas size (Fixed for this simple top-down game)
+            canvas.width = MAP_WIDTH;
+            canvas.height = MAP_HEIGHT;
+
+            // Setup Input Listeners
+            document.addEventListener('keydown', onKeyDown, false);
+            document.addEventListener('keyup', onKeyUp, false);
+            canvas.addEventListener('contextmenu', (event) => event.preventDefault()); // Block right-click menu
+            canvas.addEventListener('mousedown', onMouseDown, false);
+        }
+
+        // --- Input Handlers ---
+        function onKeyDown(event) {
+            keys[event.key.toLowerCase()] = true;
+            if (['w', 'a', 's', 'd'].includes(event.key.toLowerCase())) {
+                 event.preventDefault(); 
+            }
+        }
+
+        function onKeyUp(event) {
+            keys[event.key.toLowerCase()] = false;
+        }
+
+        function onMouseDown(event) {
+            if (!window.GAME_STATE.isGameRunning) return;
+            
+            // Right-click button code is 2
+            if (event.button === 2) { 
+                const now = Date.now();
+                if (now - lastShotTime < player.weapon.cooldown) {
+                    return; // Cooldown not finished
+                }
+                lastShotTime = now;
+
+                const rect = canvas.getBoundingClientRect();
+                const mouseX = event.clientX - rect.left;
+                const mouseY = event.clientY - rect.top;
+                
+                const angle = Math.atan2(mouseY - player.y, mouseX - player.x);
+                
+                // Spawn projectile slightly offset from player center
+                const spawnOffset = player.radius + 5;
+                const startX = player.x + Math.cos(angle) * spawnOffset;
+                const startY = player.y + Math.sin(angle) * spawnOffset;
+
+                projectiles.push(new Projectile(startX, startY, angle, player.weapon));
+            }
+        }
+
+        // --- Drawing and Game Logic ---
+
+        function drawPlayer() {
+            // Determine player rotation based on keys (if moving) or last movement
+            let rotation = 0; // Default facing right (0 degrees)
+            if (player.dx !== 0 || player.dy !== 0) {
+                rotation = Math.atan2(player.dy, player.dx);
+            }
+            
+            ctx.save();
+            ctx.translate(player.x, player.y);
+            ctx.rotate(rotation); 
+            
+            // Draw the custom shape relative to the rotated canvas center (0, 0)
+            drawShape(ctx, 0, 0, player.radius, player.color, player.playerDesign);
+
+            ctx.restore();
+
+            // Draw a simple health indicator (outside rotation context)
+            const healthRatio = player.health / 100;
+            ctx.strokeStyle = healthRatio > 0.5 ? '#00ffc8' : (healthRatio > 0.2 ? '#ffcc00' : '#ff0077');
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.radius + 5, 0, Math.PI * 2 * healthRatio);
+            ctx.stroke();
+        }
+        
+        function generateMap() {
+            mapData = [];
+            const cols = MAP_WIDTH / TILE_SIZE;
+            const rows = MAP_HEIGHT / TILE_SIZE;
+
+            for (let r = 0; r < rows; r++) {
+                mapData[r] = [];
+                for (let c = 0; c < cols; c++) {
+                    mapData[r][c] = (r % 2 === 0 && c % 2 === 0) || (r % 2 !== 0 && c % 2 !== 0) ? 0 : 1;
+                }
+            }
+        }
+
+        function drawMap() {
+            const theme = currentMapTheme;
+            ctx.fillStyle = theme.background;
+            ctx.fillRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
+
+            const cols = MAP_WIDTH / TILE_SIZE;
+            const rows = MAP_HEIGHT / TILE_SIZE;
+
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    const tileType = mapData[r][c];
+                    ctx.fillStyle = tileType === 0 ? theme.tileMain : theme.tileAccent;
+                    ctx.fillRect(c * TILE_SIZE, r * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                    
+                    ctx.strokeStyle = theme.background;
+                    ctx.strokeRect(c * TILE_SIZE, r * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                }
+            }
+        }
+
+        function updatePlayerMovement() {
+            player.dx = 0;
+            player.dy = 0;
+
+            if (keys['w']) player.dy = -PLAYER_SPEED;
+            if (keys['s']) player.dy = PLAYER_SPEED;
+            if (keys['a']) player.dx = -PLAYER_SPEED;
+            if (keys['d']) player.dx = PLAYER_SPEED;
+
+            // Normalize diagonal movement speed
+            if (player.dx !== 0 && player.dy !== 0) {
+                const speed = PLAYER_SPEED / Math.sqrt(2);
+                player.dx = player.dx > 0 ? speed : (player.dx < 0 ? -speed : 0);
+                player.dy = player.dy > 0 ? speed : (player.dy < 0 ? -speed : 0);
+            }
+
+            // Apply movement and boundary checks
+            player.x += player.dx;
+            player.y += player.dy;
+
+            // Clamp player position to map boundaries
+            player.x = Math.max(player.radius, Math.min(MAP_WIDTH - player.radius, player.x));
+            player.y = Math.max(player.radius, Math.min(MAP_HEIGHT - player.radius, player.y));
+        }
+        
+        function spawnEnemy() {
+            let x, y;
+            // Spawn around the edges
+            if (Math.random() < 0.5) { // Spawn on X edges
+                x = Math.random() < 0.5 ? -ENEMY_RADIUS : MAP_WIDTH + ENEMY_RADIUS;
+                y = Math.random() * MAP_HEIGHT;
+            } else { // Spawn on Y edges
+                x = Math.random() * MAP_WIDTH;
+                y = Math.random() < 0.5 ? -ENEMY_RADIUS : MAP_HEIGHT + ENEMY_RADIUS;
+            }
+            // All enemies are dark red and have the same health
+            enemies.push(new Enemy(x, y, ENEMY_RADIUS, '#8B0000', ENEMY_SPEED, ENEMY_MAX_HEALTH));
+        }
+
+        function spawnWave(waveNumber) {
+            const count = ZOMBIE_COUNT_PER_WAVE + (waveNumber * 2); 
+            enemies = []; 
+            
+            // Spawn all enemies instantly for simplicity
+            for (let i = 0; i < count; i++) {
+                spawnEnemy();
+            }
+        }
+        
+        function updateEnemies() {
+            // Player's coordinates for AI target
+            const playerX = player.x;
+            const playerY = player.y;
+
+            // Update enemy positions and check player collision
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                let enemy = enemies[i];
+                
+                // 1. Enemy AI and Drawing
+                enemy.update(playerX, playerY); 
+
+                // 2. Collision with Player
+                const distPlayer = Math.hypot(playerX - enemy.x, playerY - enemy.y);
+                if (distPlayer - player.radius - enemy.radius < 1) {
+                    player.health -= 1; // Continuous damage on contact
+                    if (player.health <= 0) {
+                        window.endGame();
+                        return; 
+                    }
+                }
+            }
+            
+            // 3. Projectile Collision Check (reverse loop for safe removal)
+            for (let pIndex = projectiles.length - 1; pIndex >= 0; pIndex--) {
+                const projectile = projectiles[pIndex];
+                let hit = false;
+                
+                for (let eIndex = enemies.length - 1; eIndex >= 0; eIndex--) {
+                    const enemy = enemies[eIndex];
+                    const distBullet = Math.hypot(projectile.x - enemy.x, projectile.y - enemy.y);
+
+                    if (distBullet - enemy.radius - projectile.radius < 1) {
+                        // Bullet hit enemy
+                        enemy.health -= projectile.damage;
+                        hit = true; 
+
+                        // Enemy Death Logic
+                        if (enemy.health <= 0) {
+                            enemies.splice(eIndex, 1);
+                            kills++;
+                        }
+                        break; // Only hit one enemy per projectile
+                    }
+                }
+
+                // Remove projectile if it hit an enemy or went off-screen
+                if (hit || 
+                    projectile.x + projectile.radius < 0 || 
+                    projectile.x - projectile.radius > MAP_WIDTH || 
+                    projectile.y + projectile.radius < 0 || 
+                    projectile.y - projectile.radius > MAP_HEIGHT) {
+                    
+                    projectiles.splice(pIndex, 1);
+                }
+            }
+
+
+            // 4. Wave End Check
+            if (enemies.length === 0 && window.GAME_STATE.isGameRunning) {
+                wave++;
+                spawnWave(wave);
+                player.health = Math.min(100, player.health + 20); // Heal player slightly
+                alertBox.show('Wave Complete', `Preparing for Wave ${wave}! Health restored.`, 'text-yellow-500');
+            }
+        }
+
+
+        function updateHUD() {
+             document.getElementById('hud-wave').textContent = wave;
+             document.getElementById('hud-zombies').textContent = enemies.length;
+             document.getElementById('hud-kills').textContent = kills;
+             document.getElementById('hud-weapon').textContent = player.weapon.name;
+        }
+        
+        function animate() {
+            if (!window.GAME_STATE.isGameRunning) return;
+
+            // 1. Clear Canvas
+            ctx.clearRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
+
+            // 2. Update Logic
+            updatePlayerMovement();
+            updateEnemies(); 
+
+            // 3. Drawing
+            drawMap();
+            
+            // Draw Projectiles
+            projectiles.forEach(p => p.update());
+
+            // Draw Entities
+            enemies.forEach(e => e.draw());
+            drawPlayer();
+            
+            // 4. Update UI
+            updateHUD();
+
+            // 5. Loop
+            animationFrameId = requestAnimationFrame(animate);
+        }
+
+        window.initGame = () => {
+            init2D();
+        };
+        
+        document.addEventListener('DOMContentLoaded', window.initGame);
+
+    </script>
+</body>
+</html>
